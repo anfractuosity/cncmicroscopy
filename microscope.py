@@ -1,16 +1,20 @@
+#!/usr/bin/python3
+
 import math
+import os
 import queue
 import re
-import os
 import time
-from concurrent.futures import Future
 from collections import deque
+from concurrent.futures import Future
 from threading import Thread
 
 import numpy as np
 import serial
-import toupcam
 from PIL import Image
+
+import toupcam
+
 
 class Frame:
     def __init__(self, buf, width, height):
@@ -18,6 +22,7 @@ class Frame:
         self.timestamp = time.time()
         self.width = width
         self.height = height
+
 
 class CNCMicroscope:
     def __init__(self, begin, end, step, imagedir):
@@ -32,16 +37,20 @@ class CNCMicroscope:
     @staticmethod
     def cam(callback, ctx):
         a = toupcam.Toupcam.EnumV2()
-        for r in a[0].model.res:
-            print("\t = [{} x {}]".format(r.width, r.height))
-
         ctx.hcam = toupcam.Toupcam.Open(a[0].id)
+        ctx.hcam.put_Size(2456, 1842)
         ctx.width, ctx.height = ctx.hcam.get_Size()
         ctx.hcam.StartPullModeWithCallback(callback, ctx)
         res = ctx.fin.result()
 
     def start(self):
-        t = Thread(target=self.cam, args=(self.cameraCallback, self,))
+        t = Thread(
+            target=self.cam,
+            args=(
+                self.cameraCallback,
+                self,
+            ),
+        )
         t.start()
 
         x0, y0 = self.begin
@@ -51,7 +60,7 @@ class CNCMicroscope:
 
         for y in np.linspace(y0, y1, int(ystep)):
             for x in np.linspace(x0, x1, int(xstep)):
-                self.__write(f"G90 G01 X{x:.3f} Y{y:.3f} F10\n")
+                self.__write(f"$J=G90 X{x:.3f} Y{y:.3f} F10\n")
                 dat = self.ser.readline().decode().strip()
 
                 # Check if we have reached position
@@ -102,6 +111,7 @@ class CNCMicroscope:
             buf = bytes(bufsize)
             hcam.PullImageV2(buf, 24, None)
             ctx.q.append(Frame(buf, ctx.width, ctx.height))
+
 
 cnc = CNCMicroscope((0, 3), (1, 4), 0.4, "test")
 cnc.start()
