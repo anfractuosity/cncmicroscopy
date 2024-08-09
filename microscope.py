@@ -25,11 +25,12 @@ class Frame:
 
 
 class CNCMicroscope:
-    def __init__(self, begin, end, step, imagedir):
+    def __init__(self, begin, end, step, exposure, imagedir):
         self.ser = serial.Serial("/dev/ttyUSB0", 115200, timeout=1)
         self.begin = begin
         self.end = end
         self.step = step
+        self.exposure = exposure
         self.imagedir = imagedir
         self.q = deque(maxlen=1)
         self.fin = Future()
@@ -39,6 +40,9 @@ class CNCMicroscope:
         a = toupcam.Toupcam.EnumV2()
         ctx.hcam = toupcam.Toupcam.Open(a[0].id)
         ctx.hcam.put_Size(2456, 1842)
+        ctx.hcam.put_AutoExpoEnable(False)
+        ctx.hcam.put_ExpoTime(ctx.exposure)
+        ctx.hcam.put_ExpoAGain(100)
         ctx.width, ctx.height = ctx.hcam.get_Size()
         ctx.hcam.StartPullModeWithCallback(callback, ctx)
         res = ctx.fin.result()
@@ -113,5 +117,5 @@ class CNCMicroscope:
             ctx.q.append(Frame(buf, ctx.width, ctx.height))
 
 
-cnc = CNCMicroscope((0, 3), (1, 4), 0.4, "test")
+cnc = CNCMicroscope((0, 10), (1, 14), 0.4, int(1e6), "test")
 cnc.start()
