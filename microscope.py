@@ -32,7 +32,7 @@ class CNCMicroscope:
         self.step = step
         self.exposure = exposure
         self.imagedir = imagedir
-        self.q = deque(maxlen=1)
+        self.q = deque(maxlen=10)
         self.fin = Future()
 
     @staticmethod
@@ -85,20 +85,20 @@ class CNCMicroscope:
                         break
                     time.sleep(0.1)
 
-                time.sleep(2)
+                last = None
+                mse = 100
+                while mse > 21:
+                    if len(self.q) >= 10:
+                        last = list(self.q)[-2:]
+                        mse = np.mean((np.array(last[0].buf) - np.array(last[1].buf))**2)
+                        print(f"mse {mse}")
+                        last = last[1].buf
+
                 print(f"X{x:.3f} Y{y:.3f}")
 
                 # Get photos
-                while True:
-                    try:
-                        frame = self.q.pop()
-                        image = Image.frombuffer(
-                            "RGB", (frame.width, frame.height), frame.buf, "raw"
-                        )
-                        image.save(os.path.join(self.imagedir, f"{x:.3f}_{y:.3f}.tif"))
-                        break
-                    except IndexError:
-                        pass
+                last.save(os.path.join(self.imagedir, f"{x:.3f}_{y:.3f}.tif"))
+
             tmp = x0
             x0 = x1
             x1 = tmp
@@ -114,8 +114,9 @@ class CNCMicroscope:
             bufsize = ((ctx.width * 24 + 31) // 32 * 4) * ctx.height
             buf = bytes(bufsize)
             hcam.PullImageV2(buf, 24, None)
-            ctx.q.append(Frame(buf, ctx.width, ctx.height))
+            image = Image.frombuffer("RGB", (ctx.width, ctx.height), buf, "raw")
+            ctx.q.append(Frame(image, ctx.width, ctx.height))
 
 
-cnc = CNCMicroscope((0, 10), (1, 14), 0.4, int(1e6), "test")
+cnc = CNCMicroscope((18, 21), (18.5, 21.5), 0.2, int(2e3), "test")
 cnc.start()
