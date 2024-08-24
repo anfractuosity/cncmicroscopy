@@ -7,8 +7,11 @@ import re
 import time
 from collections import deque
 from concurrent.futures import Future
+from multiprocessing import Queue
 from threading import Thread
 
+import matplotlib
+import matplotlib.pyplot as plt
 import numpy as np
 import serial
 from PIL import Image
@@ -32,6 +35,7 @@ class CNCMicroscope:
         self.step = step
         self.exposure = exposure
         self.imagedir = imagedir
+        self.bq = Queue()
         self.q = deque(maxlen=10)
         self.fin = Future()
 
@@ -46,6 +50,41 @@ class CNCMicroscope:
         ctx.width, ctx.height = ctx.hcam.get_Size()
         ctx.hcam.StartPullModeWithCallback(callback, ctx)
         res = ctx.fin.result()
+        ctx.hcam.Stop()
+
+    def mse_analysis(self):
+        mses = []
+        t = Thread(
+            target=self.cam,
+            args=(
+                self.cameraCallback,
+                self,
+            ),
+        )
+        t.start()
+
+        old = None
+        for i in range(600):
+            if old is None:
+                old = self.bq.get()
+            b = self.bq.get()
+            mse = np.mean((old.buf - b.buf)**2)
+            mses += [mse]
+            old = b
+
+        self.fin.set_result(True)
+
+        fig, ax = plt.subplots()
+        ax.plot(np.arange(len(mses)), mses)
+        ax.set_xlabel("Nth value")
+        ax.set_title("MSE values")
+        ax.set_ylabel("MSE")
+        fig.tight_layout()
+        fig.savefig(f"mse_analysis.png")
+        fig.savefig(f"mse_analysis.svg")
+
+        im = Image.fromarray(b.buf)
+        im.save("mse_analysis.tif")
 
     def start(self):
         t = Thread(
@@ -53,7 +92,7 @@ class CNCMicroscope:
             args=(
                 self.cameraCallback,
                 self,
-            ),
+            )
         )
         t.start()
 
@@ -115,8 +154,10 @@ class CNCMicroscope:
             buf = bytes(bufsize)
             hcam.PullImageV2(buf, 24, None)
             image = Image.frombuffer("RGB", (ctx.width, ctx.height), buf, "raw")
+            r, g, b = image.split()
+            ctx.bq.put(Frame(np.array(g), ctx.width, ctx.height))
             ctx.q.append(Frame(image, ctx.width, ctx.height))
 
-
 cnc = CNCMicroscope((18, 21), (18.5, 21.5), 0.2, int(2e3), "test")
-cnc.start()
+cnc.mse_analysis()
+#cnc.start()
