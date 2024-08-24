@@ -38,6 +38,7 @@ class CNCMicroscope:
         self.bq = Queue()
         self.q = deque(maxlen=10)
         self.fin = Future()
+        self.mse_capture = False
 
     @staticmethod
     def cam(callback, ctx):
@@ -53,7 +54,9 @@ class CNCMicroscope:
         ctx.hcam.Stop()
 
     def mse_analysis(self):
+        feedrate = 10
         mses = []
+
         t = Thread(
             target=self.cam,
             args=(
@@ -62,6 +65,16 @@ class CNCMicroscope:
             ),
         )
         t.start()
+
+        # Move away from original position by 5mm
+        x, y, status = self.curpos()
+        self.move_abs(x + 1, y, feedrate, False)
+
+        # Move back to original position
+        self.move_abs(x, y, feedrate, False)
+
+        # Now start capturing photos
+        self.mse_capture = True
 
         old = None
         for i in range(600):
@@ -73,6 +86,7 @@ class CNCMicroscope:
             old = b
 
         self.fin.set_result(True)
+        self.mse_capture = False
 
         fig, ax = plt.subplots()
         ax.plot(np.arange(len(mses)), mses)
@@ -80,11 +94,37 @@ class CNCMicroscope:
         ax.set_title("MSE values")
         ax.set_ylabel("MSE")
         fig.tight_layout()
-        fig.savefig(f"mse_analysis.png")
+        fig.savefig(f"mse_analysis.png", dpi=400)
         fig.savefig(f"mse_analysis.svg")
 
         im = Image.fromarray(b.buf)
         im.save("mse_analysis.tif")
+
+    def move_abs(self, x, y, feedrate=10, mse=True):
+        self.__write(f"$J=G90 X{x:.3f} Y{y:.3f} F{feedrate}\n")
+        dat = self.__read()
+        return self.has_settled(x, y, mse)
+
+    def has_settled(self, x, y, mse):
+        # Check if we have reached position
+        while True:
+            x_, y_, status = self.curpos()
+            if status == "Idle" and math.isclose(x_, x, rel_tol=1e-4) and math.isclose(y_, y, rel_tol=1e-4):
+                break
+
+        if mse:
+            # Check image appears stable
+            last = None
+            mse = 100
+            while mse > 21:
+                if len(self.q) >= 10:
+                    last = list(self.q)[-2:]
+                    mse = np.mean((np.array(last[0].buf) - np.array(last[1].buf))**2)
+                    print(f"mse {mse}")
+                    last = last[1].buf
+            return last
+        else:
+            return None
 
     def start(self):
         t = Thread(
@@ -103,36 +143,7 @@ class CNCMicroscope:
 
         for y in np.linspace(y0, y1, int(ystep)):
             for x in np.linspace(x0, x1, int(xstep)):
-                self.__write(f"$J=G90 X{x:.3f} Y{y:.3f} F10\n")
-                dat = self.ser.readline().decode().strip()
-
-                # Check if we have reached position
-                while True:
-                    self.__write(f"?")
-                    dat = self.ser.readline().decode().strip()
-                    m0 = re.match(
-                        r"<([a-zA-Z]+)\|MPos:(\d+\.\d+),(\d+\.\d+),(-?\d+\.\d+)\|FS:\d+,\d+(|.+)?>",
-                        dat,
-                    )
-                    x_ = float(m0.group(2))
-                    y_ = float(m0.group(3))
-                    if (
-                        m0.group(1) == "Idle"
-                        and math.isclose(x_, x, rel_tol=1e-4)
-                        and math.isclose(y_, y, rel_tol=1e-4)
-                    ):
-                        break
-                    time.sleep(0.1)
-
-                last = None
-                mse = 100
-                while mse > 21:
-                    if len(self.q) >= 10:
-                        last = list(self.q)[-2:]
-                        mse = np.mean((np.array(last[0].buf) - np.array(last[1].buf))**2)
-                        print(f"mse {mse}")
-                        last = last[1].buf
-
+                last = self.move_abs(x, y)
                 print(f"X{x:.3f} Y{y:.3f}")
 
                 # Get photos
@@ -142,6 +153,20 @@ class CNCMicroscope:
             x0 = x1
             x1 = tmp
         self.fin.set_result(True)
+
+    def curpos(self):
+        self.__write(f"?")
+        dat = self.__read()
+        m0 = re.match(
+            r"<([a-zA-Z]+)\|MPos:(\d+\.\d+),(\d+\.\d+),(-?\d+\.\d+)\|FS:\d+,\d+(|.+)?>",
+            dat,
+        )
+        x = float(m0.group(2))
+        y = float(m0.group(3))
+        return (x, y, m0.group(1))
+
+    def __read(self):
+        return self.ser.readline().decode().strip()
 
     def __write(self, data):
         self.ser.write(data.encode())
@@ -155,9 +180,10 @@ class CNCMicroscope:
             hcam.PullImageV2(buf, 24, None)
             image = Image.frombuffer("RGB", (ctx.width, ctx.height), buf, "raw")
             r, g, b = image.split()
-            ctx.bq.put(Frame(np.array(g), ctx.width, ctx.height))
+            if ctx.mse_capture:
+                ctx.bq.put(Frame(np.array(g), ctx.width, ctx.height))
             ctx.q.append(Frame(image, ctx.width, ctx.height))
 
-cnc = CNCMicroscope((18, 21), (18.5, 21.5), 0.2, int(2e3), "test")
+cnc = CNCMicroscope((20, 70), (20.5, 70.5), 0.2, int(2e3), "test")
 cnc.mse_analysis()
 #cnc.start()
