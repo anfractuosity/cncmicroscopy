@@ -89,6 +89,7 @@ class CNCMicroscope:
         ctx.hcam.Stop()
 
     def mse_analysis(self):
+        times = []
         mses = []
 
         # Perform autofocus before test
@@ -111,18 +112,22 @@ class CNCMicroscope:
             b = self.bq.get()
             mse = np.mean((old.buf - b.buf) ** 2)
             mses += [mse]
+            times += [b.timestamp]
             old = b
 
         self.mse_capture = False
 
         fig, ax = plt.subplots()
-        ax.plot(np.arange(len(mses)), mses)
-        ax.set_xlabel("Nth value")
-        ax.set_title("MSE values")
-        ax.set_ylabel("MSE")
+        ax.plot(np.array(times) - times[0], mses)
+        ax.set_xlabel("Time (seconds)")
+        ax.set_title("MSE values across time")
+        ax.set_ylabel("MSE value")
         fig.tight_layout()
         fig.savefig(f"mse_analysis.png", dpi=400)
         fig.savefig(f"mse_analysis.svg")
+
+        np.save("mse_analysis_x.np", np.array(times))
+        np.save("mse_analysis_y.np", np.array(mses))
 
         im = Image.fromarray(b.buf)
         im.save("mse_analysis.tif")
@@ -277,8 +282,5 @@ cnc = CNCMicroscope(
     imagedir="test",
 )
 
-cnc.autofocus()
+cnc.mse_analysis()
 cnc.stop()
-
-# cnc.mse_analysis()
-# cnc.start()
