@@ -4,6 +4,7 @@ import math
 import os
 import queue
 import re
+import statistics
 import time
 from collections import deque
 from concurrent.futures import Future
@@ -62,7 +63,7 @@ class CNCMicroscope:
         self.exposure = exposure
         self.imagedir = imagedir
         self.bq = Queue()
-        self.q = deque(maxlen=10)
+        self.q = Queue(10)
         self.fin = Future()
         self.mse_capture = False
 
@@ -141,7 +142,7 @@ class CNCMicroscope:
 
         for z in np.linspace(z0, z1, int(zstep)):
             img = self.move_abs_z(z)
-            img.save(os.path.join(self.imagedir, f"{abs(z):.3f}.tif"))
+            img.save(os.path.join(self.imagedir, f"af-{abs(z):.3f}.tif"))
 
             # Measure sharpness from JPEG size
             buf = BytesIO()
@@ -157,14 +158,36 @@ class CNCMicroscope:
 
         sharpness_best = sorted(allv, key=lambda x: x["sharp"], reverse=True)
         bestz = sharpness_best[0]["z"]
-
         print(bestz)
 
         # Move back to upper zlimit (necessary to avoid backlash - if you don't do this, next 'move' isn't correct)
         self.move_abs_z(z0)
         self.move_abs_z(bestz)
 
+    def wait_till_stable(self):
+        count = 4
+        frame = None
+        old = None
+        curtime = time.time()
+        mses = deque(maxlen=count)
+        while True:
+            frame = self.q.get()
+            if frame.timestamp >= curtime:
+                if old is not None:
+                    _, g0, _ = old.buf.split()
+                    _, g1, _ = frame.buf.split()
+                    mse = np.mean((np.array(g0) - np.array(g1)) ** 2)
+                    mses += [mse]
+                    if len(mses) == count and statistics.stdev(mses) < 0.01:
+                        break
+                old = frame
+        return frame.buf
+
     def move_abs_z(self, z, mse=True):
+        z0, z1 = self.zlimit
+        if z < z1 or z > z0:
+            raise Exception("Sorry, can't go beyond limit")
+
         self.__write(f"$J=G90 Z{z:.3f} F{self.feed}\n")
         dat = self.__read()
 
@@ -175,21 +198,16 @@ class CNCMicroscope:
                 break
 
         if mse:
-            time.sleep(0.5)
-            # Check image appears stable
-            last = None
-            mse = 100
-            while mse > 26:
-                if len(self.q) >= 10:
-                    last = list(self.q)[-2:]
-                    mse = np.mean((np.array(last[0].buf) - np.array(last[1].buf)) ** 2)
-                    #print(f"mse {mse}")
-                    last = last[1].buf
-            return last
+            return self.wait_till_stable()
         else:
             return None
 
     def move_abs(self, x, y, mse=True):
+        x0, y0 = self.begin
+        x1, y1 = self.end
+        if not (x >= x0 and x <= x1 and y >= y0 and y <= y1):
+            raise Exception("Sorry, can't go beyond limit")
+
         self.__write(f"$J=G90 X{x:.3f} Y{y:.3f} F{self.feed}\n")
         dat = self.__read()
 
@@ -205,15 +223,7 @@ class CNCMicroscope:
 
         if mse:
             # Check image appears stable
-            last = None
-            mse = 100
-            while mse > 25:
-                if len(self.q) >= 10:
-                    last = list(self.q)[-2:]
-                    mse = np.mean((np.array(last[0].buf) - np.array(last[1].buf)) ** 2)
-                    print(f"mse {mse}")
-                    last = last[1].buf
-            return last
+            return self.wait_till_stable()
         else:
             return None
 
@@ -269,7 +279,7 @@ class CNCMicroscope:
             r, g, b = image.split()
             if ctx.mse_capture:
                 ctx.bq.put(Frame(np.array(g), ctx.width, ctx.height))
-            ctx.q.append(Frame(image, ctx.width, ctx.height))
+            ctx.q.put(Frame(image, ctx.width, ctx.height))
 
 
 cnc = CNCMicroscope(
@@ -282,5 +292,6 @@ cnc = CNCMicroscope(
     imagedir="test",
 )
 
-cnc.mse_analysis()
+#cnc.start()
+cnc.autofocus()
 cnc.stop()
