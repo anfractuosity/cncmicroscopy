@@ -178,6 +178,9 @@ class CNCMicroscope:
                     _, g1, _ = frame.buf.split()
                     mse = np.mean((np.array(g0) - np.array(g1)) ** 2)
                     mses += [mse]
+
+                    # Note that a value of 0.01 requires lots of stability and may not converge otherwise.
+                    # Can try a value of 0.1 instead.
                     if len(mses) == count and statistics.stdev(mses) < 0.01:
                         break
                 old = frame
