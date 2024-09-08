@@ -50,7 +50,7 @@ class CNCMicroscope:
         end,
         zlimit=(-1, -11),
         step=0.2,
-        feed=10,
+        feed=1,
         exposure=int(2e3),
         imagedir="test",
     ):
@@ -183,12 +183,15 @@ class CNCMicroscope:
                 old = frame
         return frame.buf
 
-    def move_abs_z(self, z, mse=True):
+    def move_abs_z(self, z, mse=True, feed=None):
         z0, z1 = self.zlimit
         if z < z1 or z > z0:
             raise Exception("Sorry, can't go beyond limit")
 
-        self.__write(f"$J=G90 Z{z:.3f} F{self.feed}\n")
+        if feed is None:
+            feed = self.feed
+
+        self.__write(f"$J=G90 Z{z:.3f} F{feed}\n")
         dat = self.__read()
 
         # Check if we have reached position
@@ -202,13 +205,16 @@ class CNCMicroscope:
         else:
             return None
 
-    def move_abs(self, x, y, mse=True):
+    def move_abs(self, x, y, mse=True, feed=None):
         x0, y0 = self.begin
         x1, y1 = self.end
         if not (x >= x0 and x <= x1 and y >= y0 and y <= y1):
             raise Exception("Sorry, can't go beyond limit")
 
-        self.__write(f"$J=G90 X{x:.3f} Y{y:.3f} F{self.feed}\n")
+        if feed is None:
+            feed = self.feed
+
+        self.__write(f"$J=G90 X{x:.3f} Y{y:.3f} F{feed}\n")
         dat = self.__read()
 
         # Check if we have reached position
@@ -230,8 +236,14 @@ class CNCMicroscope:
     def start(self):
         x0, y0 = self.begin
         x1, y1 = self.end
+        z0, z1 = self.zlimit
         ystep = ((y1 - y0) / self.step) + 1
         xstep = ((x1 - x0) / self.step) + 1
+
+        # Move to start x,y,z location then focus
+        self.move_abs(x0, y0, mse=False, feed=100)
+        self.move_abs_z(z0, mse=False, feed=100)
+        self.autofocus()
 
         for y in np.linspace(y0, y1, int(ystep)):
             for x in np.linspace(x0, x1, int(xstep)):
@@ -239,7 +251,7 @@ class CNCMicroscope:
                 print(f"X{x:.3f} Y{y:.3f}")
 
                 # Get photos
-                last.save(os.path.join(self.imagedir, f"{x:.3f}_{y:.3f}.tif"))
+                last.save(os.path.join(self.imagedir, f"tile_{x:.3f}_{y:.3f}.tif"))
 
             tmp = x0
             x0 = x1
@@ -286,12 +298,11 @@ cnc = CNCMicroscope(
     (20, 70),
     (20.5, 70.5),
     zlimit=(-10, -12),
-    step=0.2,
-    feed=10,
+    step=0.05,
+    feed=1,
     exposure=int(2e3),
     imagedir="test",
 )
 
-#cnc.start()
-cnc.autofocus()
+cnc.start()
 cnc.stop()
