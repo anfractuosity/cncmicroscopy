@@ -1,7 +1,9 @@
 #!/usr/bin/python3
 
+import argparse
 import glob
 import os
+import sys
 from pathlib import Path
 
 """
@@ -9,17 +11,12 @@ from pathlib import Path
 Simple script to use Fiji for image stitching
 from our tiles.
 
-"""
-
-image_dir = "/tmp/images"
-ext = "tif"
-
-"""
-
 Use integer values for x,y for tile coordinates for Fiji.
 Flip image from camera and invert y coordinate.
 
 """
+
+
 def invert_y(path, ext):
     xs = []
     ys = []
@@ -46,15 +43,27 @@ def invert_y(path, ext):
 
     return len(set(xs)), len(set(ys))
 
-gridx, gridy = invert_y(image_dir, ext)
 
-script = f"""
-run("Grid/Collection stitching", "type=[Filename defined position] order=[Defined by filename         ] grid_size_x={gridx} grid_size_y={gridy} tile_overlap=50 first_file_index_x=0 first_file_index_y=0 directory={image_dir} file_names=tileb_{{x}}_{{y}}.tif output_textfile_name=TileConfiguration.txt fusion_method=[Linear Blending] regression_threshold=0.30 max/avg_displacement_threshold=2.50 absolute_displacement_threshold=3.50 compute_overlap computation_parameters=[Save memory (but be slower)] image_output=[Write to disk] output_directory={image_dir}");
-"""
+if __name__ == "__main__":
 
-script_path = os.path.join(image_dir, "run.ijm")
-out = open(script_path, "w")
-out.write(script)
-out.close()
+    # Parse arguments
+    parser = argparse.ArgumentParser(description="CLI to stitch the tiles with ImageJ")
+    parser.add_argument("imagedir")
+    args = parser.parse_args()
 
-os.system(f"ImageJ-linux64 --headless --console -macro {script_path}")
+    if not os.path.isdir(args.imagedir):
+        print("Need to pass valid directory", file=sys.stderr)
+        exit(1)
+
+    gridx, gridy = invert_y(args.imagedir, "tif")
+
+    script = f"""
+	run("Grid/Collection stitching", "type=[Filename defined position] order=[Defined by filename         ] grid_size_x={gridx} grid_size_y={gridy} tile_overlap=50 first_file_index_x=0 first_file_index_y=0 directory={args.imagedir} file_names=tileb_{{x}}_{{y}}.tif output_textfile_name=TileConfiguration.txt fusion_method=[Linear Blending] regression_threshold=0.30 max/avg_displacement_threshold=2.50 absolute_displacement_threshold=3.50 compute_overlap computation_parameters=[Save memory (but be slower)] image_output=[Write to disk] output_directory={args.imagedir}");
+	"""
+
+    script_path = os.path.join(args.imagedir, "run.ijm")
+    out = open(script_path, "w")
+    out.write(script)
+    out.close()
+
+    os.system(f"ImageJ-linux64 --headless --console -macro {script_path}")
