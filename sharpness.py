@@ -17,7 +17,7 @@ import numpy as np
 # https://github.com/ArduCAM/RaspberryPi/blob/master/Motorized_Focus_Camera/python/Autofocus.py#L14
 def laplacian(img):
     img_gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-    img_sobel = np.abs(cv2.Laplacian(img_gray, cv2.CV_16S, ksize=3))
+    img_sobel = np.abs(cv2.Laplacian(img_gray, cv2.CV_16S, ksize=1))
     return cv2.mean(img_sobel)[0]
 
 
