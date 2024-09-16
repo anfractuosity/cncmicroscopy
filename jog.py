@@ -18,6 +18,10 @@ if __name__ == "__main__":
         "--stop", action=argparse.BooleanOptionalAction, help="Stop jogging"
     )
 
+    parser.add_argument(
+        "--abs", action=argparse.BooleanOptionalAction, help="Absolute positioning"
+    )
+
     parser.add_argument("--x", type=float, help="Jog X")
     parser.add_argument("--y", type=float, help="Jog Y")
     parser.add_argument("--z", type=float, help="Jog Z")
@@ -35,19 +39,28 @@ if __name__ == "__main__":
         ser.flush()
         sys.exit(0)
 
+    mode = "G91"
+    if args.abs:
+        mode = "G90"
+
+    data = []
     if args.x is not None:
         x = args.x
+        data += [f"X{x}"]
 
     if args.y is not None:
         y = args.y
+        data += [f"Y{y}"]
 
     if args.z is not None:
         z = args.z
+        data += [f"Z{z}"]
 
     if args.stop:
         ser.write(b"\x85")
         ser.flush()
         sys.exit(0)
 
-    st = f"$J=G91 X{x} Y{y} Z{z} F{args.feed}\n".encode()
-    ser.write(st)
+    if len(data) > 0:
+        st = f"$J={mode} {" ".join(data)} F{args.feed}\n".encode()
+        ser.write(st)
