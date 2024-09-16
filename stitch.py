@@ -49,16 +49,19 @@ if __name__ == "__main__":
     # Parse arguments
     parser = argparse.ArgumentParser(description="CLI to stitch the tiles with ImageJ")
     parser.add_argument("imagedir")
+    parser.add_argument(
+        "--ext", dest="ext", type=str, help="Image filename extension", default="jpg"
+    )
     args = parser.parse_args()
 
     if not os.path.isdir(args.imagedir):
         print("Need to pass valid directory", file=sys.stderr)
         exit(1)
 
-    gridx, gridy = invert_y(args.imagedir, "tif")
+    gridx, gridy = invert_y(args.imagedir, args.ext)
 
     script = f"""
-	run("Grid/Collection stitching", "type=[Filename defined position] order=[Defined by filename         ] grid_size_x={gridx} grid_size_y={gridy} tile_overlap=50 first_file_index_x=0 first_file_index_y=0 directory={args.imagedir} file_names=tileb_{{x}}_{{y}}.tif output_textfile_name=TileConfiguration.txt fusion_method=[Linear Blending] regression_threshold=0.30 max/avg_displacement_threshold=2.50 absolute_displacement_threshold=3.50 compute_overlap computation_parameters=[Save memory (but be slower)] image_output=[Write to disk] output_directory={args.imagedir}");
+	run("Grid/Collection stitching", "type=[Filename defined position] order=[Defined by filename         ] grid_size_x={gridx} grid_size_y={gridy} tile_overlap=50 first_file_index_x=0 first_file_index_y=0 directory={args.imagedir} file_names=tileb_{{x}}_{{y}}.{args.ext} output_textfile_name=TileConfiguration.txt fusion_method=[Linear Blending] regression_threshold=0.30 max/avg_displacement_threshold=2.50 absolute_displacement_threshold=3.50 compute_overlap computation_parameters=[Save memory (but be slower)] image_output=[Write to disk] output_directory={args.imagedir}");
 	"""
 
     script_path = os.path.join(args.imagedir, "run.ijm")
