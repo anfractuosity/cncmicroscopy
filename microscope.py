@@ -42,31 +42,37 @@ class Frame:
         self.width = width
         self.height = height
 
-
 class CNCMicroscope:
     def __init__(
         self,
         begin,
         end,
+        squaresize=0.5,
         zlimit=(-1, -11),
+        zaf=(-1, -11),
         step=0.2,
         feed=1,
         exposure=int(2e3),
         imagedir="test",
+        imagesize=(2456, 1842)
     ):
         self.ser = serial.Serial("/dev/ttyUSB0", 115200, timeout=1)
+        self.debug = open("debug.txt", "w")
         self.begin = begin
         self.end = end
+        self.squaresize = squaresize
         self.zlimit = zlimit
+        self.zaf = zaf
         self.step = step
         self.feed = feed
         self.exposure = exposure
         self.imagedir = imagedir
+        self.imagesize = imagesize
         self.bq = Queue()
+        # Max queue size 10 elements (not circular queue)
         self.q = Queue(10)
         self.fin = Future()
         self.mse_capture = False
-
         t = Thread(
             target=self.cam,
             args=(
@@ -80,7 +86,7 @@ class CNCMicroscope:
     def cam(callback, ctx):
         a = toupcam.Toupcam.EnumV2()
         ctx.hcam = toupcam.Toupcam.Open(a[0].id)
-        ctx.hcam.put_Size(2456, 1842)
+        ctx.hcam.put_Size(ctx.imagesize[0], ctx.imagesize[1])
         ctx.hcam.put_AutoExpoEnable(False)
         ctx.hcam.put_ExpoTime(ctx.exposure)
         ctx.hcam.put_ExpoAGain(100)
@@ -133,17 +139,18 @@ class CNCMicroscope:
         im = Image.fromarray(b.buf)
         im.save("mse_analysis.tif")
 
-    def autofocus(self, step=0.01, zlimit=None, fin=False):
-        if zlimit is None:
-            zlimit = self.zlimit
-        z0, z1 = zlimit
+    def autofocus(self, step=0.001, zaf=None, fin=False):
+        if zaf is None:
+            zaf = self.zaf
+        z0, z1 = zaf
         zstep = ((z0 - z1) / step) + 1
         allv = []
 
+        sharpvals = []
+        sharpbuf = deque(maxlen=10)
         for z in np.linspace(z0, z1, int(zstep)):
             img = self.move_abs_z(z)
-            img.save(os.path.join(self.imagedir, f"af-{abs(z):.3f}.tif"))
-
+            img.save(os.path.join(self.imagedir, f"af-{abs(z):.3f}.tif"), compression='tiff_deflate', tiffinfo={317: 2, 278: 1})
             # Measure sharpness from JPEG size
             buf = BytesIO()
             img.save(buf, "JPEG")
@@ -153,19 +160,46 @@ class CNCMicroscope:
             r, g, b = img.split()
             sharpness_lap = laplacian(np.array(g))
 
+            # Measure brightness
+            bright = np.mean(np.array(g).flatten())
+            #if bright < 35:
+            #    return False
+
             # Add all sharpness values to list
-            allv += [{"z": z, "sharp": sharpness_lap}]
+            allv += [{"z": z, "sharp": sharpness_lap, "bright": bright}]
+            sharpvals += [sharpness_lap]
+            sharpbuf += [sharpness_lap]
 
         sharpness_best = sorted(allv, key=lambda x: x["sharp"], reverse=True)
         bestz = sharpness_best[0]["z"]
-        print(bestz)
+        bright = sharpness_best[0]["bright"]
+        print(f"Original best sharpness {sharpness_best[0]['sharp']} at Z {sharpness_best[0]['z']}mm")
 
-        # Move back to upper zlimit (necessary to avoid backlash - if you don't do this, next 'move' isn't correct)
-        self.move_abs_z(z0)
-        self.move_abs_z(bestz)
+        # Move back to upper zlimit
+        th = 0.07
+        before = bestz + th
+        self.move_abs_z(before)
+        z0 = before
+        z1 = bestz - th
+        zstep = ((z0 - z1) / step) + 1
+        nowsharp = 0
+        old = None
+        now = None
+        for z in np.linspace(z0, z1, int(zstep)):
+            now = self.move_abs_z(z)
+            r, g, b = now.split()
+            now_sharp = laplacian(np.array(g))
+            print(now_sharp)
+            if abs(now_sharp - sharpness_best[0]['sharp']) < 0.5:
+                break
+            old = now_sharp
+
+        print(f"Current sharpness {now_sharp}")
+        now.save(os.path.join(self.imagedir, f"af-now.tif"), compression='tiff_deflate', tiffinfo={317: 2, 278: 1})
+        return True
 
     def wait_till_stable(self):
-        count = 4
+        count = 5
         frame = None
         old = None
         curtime = time.time()
@@ -178,13 +212,19 @@ class CNCMicroscope:
                     _, g1, _ = frame.buf.split()
                     mse = np.mean((np.array(g0) - np.array(g1)) ** 2)
                     mses += [mse]
-
                     # Note that a value of 0.01 requires lots of stability and may not converge otherwise.
                     # Can try a value of 0.1 instead.
-                    if len(mses) == count and statistics.stdev(mses) < 0.01:
+                    if len(mses) == count and statistics.stdev(mses) < 0.1:
                         break
                 old = frame
         return frame.buf
+
+    def take_photo(self):
+        photo = self.wait_till_stable()
+        r, g, b = photo.split()
+        now_sharp = laplacian(np.array(g))
+        print(f"Current sharpness {now_sharp}")
+        photo.save(os.path.join(self.imagedir, f"now.tif"), compression='tiff_deflate', tiffinfo={317: 2, 278: 1})
 
     def move_abs_z(self, z, mse=True, feed=None):
         z0, z1 = self.zlimit
@@ -202,6 +242,7 @@ class CNCMicroscope:
             _, _, z_, status = self.curpos()
             if status == "Idle" and math.isclose(z_, z, rel_tol=1e-3):
                 break
+            time.sleep(0.01)
 
         if mse:
             return self.wait_till_stable()
@@ -229,6 +270,7 @@ class CNCMicroscope:
                 and math.isclose(y_, y, rel_tol=1e-4)
             ):
                 break
+            time.sleep(0.01)
 
         if mse:
             # Check image appears stable
@@ -237,28 +279,38 @@ class CNCMicroscope:
             return None
 
     def start(self):
-        x0, y0 = self.begin
-        x1, y1 = self.end
+        sx0, sy0 = self.begin
+        sx1, sy1 = self.end
         z0, z1 = self.zlimit
-        ystep = ((y1 - y0) / self.step) + 1
-        xstep = ((x1 - x0) / self.step) + 1
 
-        # Move to start x,y,z location then focus
-        self.move_abs(x0, y0, mse=False, feed=100)
-        self.move_abs_z(z0, mse=False, feed=100)
-        self.autofocus()
-
-        for y in np.linspace(y0, y1, int(ystep)):
-            for x in np.linspace(x0, x1, int(xstep)):
-                last = self.move_abs(x, y)
-                print(f"X{x:.3f} Y{y:.3f}")
-
-                # Get photos
-                last.save(os.path.join(self.imagedir, f"tile_{x:.3f}_{y:.3f}.tif"))
-
-            tmp = x0
-            x0 = x1
-            x1 = tmp
+        done = set()
+        fake = Image.new('RGB', self.imagesize)
+        fake.save(os.path.join(self.imagedir, f"fake.tif"), compression='tiff_deflate', tiffinfo={317: 2, 278: 1})
+        for squarey in np.arange(sy0, sy1, self.squaresize):
+            for squarex in np.arange(sx0, sx1, self.squaresize):
+                xpos = squarex + (self.squaresize / 2)
+                ypos = squarey + (self.squaresize / 2)
+                self.move_abs(xpos, ypos, mse=False)
+                af = self.autofocus()
+                x0, y0 = (squarex, squarey)
+                x1, y1 = (squarex + self.squaresize, squarey + self.squaresize)
+                ystep = ((y1 - y0) / self.step) + 1
+                xstep = ((x1 - x0) / self.step) + 1
+                for y in np.linspace(y0, y1, int(ystep)):
+                    for x in np.linspace(x0, x1, int(xstep)):
+                        if (x, y) not in done:
+                            if af:
+                                last = self.move_abs(x, y)
+                                print(f"X{x:.3f} Y{y:.3f}")
+                                # Get photos
+                                last.save(os.path.join(self.imagedir, f"tile_{x:.3f}_{y:.3f}.tif"), compression='tiff_deflate', tiffinfo={317: 2, 278: 1})
+                            else:
+                                # Create fake image
+                                os.symlink("fake.tif", os.path.join(self.imagedir, f"tile_{x:.3f}_{y:.3f}.tif"))
+                            done.add((x, y))
+                    tmp = x0
+                    x0 = x1
+                    x1 = tmp
 
     def stop(self):
         self.fin.set_result(True)
@@ -278,10 +330,15 @@ class CNCMicroscope:
         return (x, y, z, m0.group(1))
 
     def __read(self):
-        return self.ser.readline().decode().strip()
+        line = self.ser.readline().decode().strip()
+        self.debug.write(f"<{line}\n")
+        self.debug.flush()
+        return line
 
     def __write(self, data):
         self.ser.write(data.encode())
+        self.debug.write(f">{data}\n")
+        self.debug.flush()
 
     @staticmethod
     def cameraCallback(nEvent, ctx):
@@ -296,12 +353,13 @@ class CNCMicroscope:
                 ctx.bq.put(Frame(np.array(g), ctx.width, ctx.height))
             ctx.q.put(Frame(image, ctx.width, ctx.height))
 
-
 cnc = CNCMicroscope(
-    (20, 70),
-    (20.5, 70.5),
-    zlimit=(-10, -12),
-    step=0.05,
+    (45, 45),
+    (46, 46),
+    squaresize=0.25, # Tried 0.5, too large, as focus off on some tiles, tried 0.25 which seems ok
+    zlimit=(-10, -17),
+    zaf=(-11, -17),
+    step=0.1,        # Could this be increased
     feed=1,
     exposure=int(2e3),
     imagedir="test",
