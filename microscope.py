@@ -357,8 +357,8 @@ cnc = CNCMicroscope(
     (45, 45),
     (46, 46),
     squaresize=0.25, # Tried 0.5, too large, as focus off on some tiles, tried 0.25 which seems ok
-    zlimit=(-10, -17),
-    zaf=(-11, -17),
+    zlimit=(-10, -13),
+    zaf=(-11.2, -11.5),
     step=0.1,        # Could this be increased
     feed=1,
     exposure=int(2e3),
